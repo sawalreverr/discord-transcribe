@@ -1,0 +1,57 @@
+# dependencies
+node_modules/
+
+# build output
+dist/
+build/
+
+# environment
+.env
+.env.local
+.env.*.local
+
+# logs
+logs/
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# testing
+coverage/
+.nyc_output/
+
+# misc
+*.tsbuildinfo
+
+# whisper.cpp (large binaries)
+whisper.cpp/
+
+# large model files
+*.ggml-bin
+*.gguf
+
+# temporary files
+tmp/
+temp/
+*.tmp
+*.temp
+
+# runtime data
+.pid
+*.pid
+
+# credential files
+*.pem
+*.key
+credentials.json
