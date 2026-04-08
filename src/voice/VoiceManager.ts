@@ -3,99 +3,105 @@ import type { VoiceChannel } from 'discord.js';
 import { logger } from '../services/LoggerService.js';
 import { AudioReceiver } from './AudioReceiver.js';
 import type { AudioChunk } from '../types/index.js';
+import type { Config } from '../config/index.js';
 
 export class VoiceManager {
-    private connections: Map<string, VoiceConnection> = new Map();
-    private receivers: Map<string, AudioReceiver> = new Map();
-    private onAudioChunk: (guildId: string, chunk: AudioChunk) => void;
-    private getUsername: (guildId: string, userId: string) => string;
+  private connections: Map<string, VoiceConnection> = new Map();
+  private receivers: Map<string, AudioReceiver> = new Map();
+  private onAudioChunk: (guildId: string, chunk: AudioChunk) => void;
+  private getUsername: (guildId: string, userId: string) => string;
+  private config: Config;
 
-    constructor(
-        onAudioChunk: (guildId: string, chunk: AudioChunk) => void,
-        getUsername: (guildId: string, userId: string) => string
-    ) {
-        this.onAudioChunk = onAudioChunk;
-        this.getUsername = getUsername;
+  constructor(
+    onAudioChunk: (guildId: string, chunk: AudioChunk) => void,
+    getUsername: (guildId: string, userId: string) => string,
+    config: Config
+  ) {
+    this.onAudioChunk = onAudioChunk;
+    this.getUsername = getUsername;
+    this.config = config;
+  }
+
+  async join(channel: VoiceChannel): Promise<VoiceConnection> {
+    const guildId = channel.guild.id;
+
+    if (this.connections.has(guildId)) {
+      await this.leave(guildId);
     }
 
-    async join(channel: VoiceChannel): Promise<VoiceConnection> {
-        const guildId = channel.guild.id;
+    const connection = joinVoiceChannel({
+      channelId: channel.id,
+      guildId: guildId,
+      adapterCreator: channel.guild.voiceAdapterCreator,
+    });
 
-        if (this.connections.has(guildId)) {
-            await this.leave(guildId);
-        }
+    this.connections.set(guildId, connection);
 
-        const connection = joinVoiceChannel({
-            channelId: channel.id,
-            guildId: guildId,
-            adapterCreator: channel.guild.voiceAdapterCreator,
-        });
+    const receiver = new AudioReceiver(
+      connection.receiver,
+      (chunk) => this.onAudioChunk(guildId, chunk),
+      (userId) => this.getUsername(guildId, userId),
+      this.config
+    );
+    this.receivers.set(guildId, receiver);
 
-        this.connections.set(guildId, connection);
+    logger.info(`Joined voice channel: ${channel.name} in guild: ${channel.guild.name}`);
+    return connection;
+  }
 
-        const receiver = new AudioReceiver(
-            connection.receiver,
-            (chunk) => this.onAudioChunk(guildId, chunk),
-            (userId) => this.getUsername(guildId, userId)
-        );
-        this.receivers.set(guildId, receiver);
+  async leave(guildId: string): Promise<void> {
+    const connection = this.connections.get(guildId);
+    const receiver = this.receivers.get(guildId);
 
-        logger.info(`Joined voice channel: ${channel.name} in guild: ${channel.guild.name}`);
-        return connection;
+    if (receiver) {
+      receiver.stopAll();
     }
 
-    async leave(guildId: string): Promise<void> {
-        const connection = this.connections.get(guildId);
-        const receiver = this.receivers.get(guildId);
-
-        if (receiver) {
-            receiver.stopAll();
-        }
-
-        if (connection) {
-            connection.disconnect();
-            connection.destroy();
-            this.connections.delete(guildId);
-        }
-
-        this.receivers.delete(guildId);
-        logger.info(`Left voice channel in guild: ${guildId}`);
+    if (connection) {
+      connection.disconnect();
+      connection.destroy();
+      this.connections.delete(guildId);
     }
 
-    isConnected(guildId: string): boolean {
-        return this.connections.has(guildId);
-    }
+    this.receivers.delete(guildId);
+    logger.info(`Left voice channel in guild: ${guildId}`);
+  }
 
-    getConnection(guildId: string): VoiceConnection | undefined {
-        return this.connections.get(guildId);
-    }
+  isConnected(guildId: string): boolean {
+    return this.connections.has(guildId);
+  }
 
-    getReceiver(guildId: string): AudioReceiver | undefined {
-        return this.receivers.get(guildId);
-    }
+  getConnection(guildId: string): VoiceConnection | undefined {
+    return this.connections.get(guildId);
+  }
 
-    getConnectedGuilds(): string[] {
-        return Array.from(this.connections.keys());
-    }
+  getReceiver(guildId: string): AudioReceiver | undefined {
+    return this.receivers.get(guildId);
+  }
 
-    async leaveAll(): Promise<void> {
-        const guildIds = Array.from(this.connections.keys());
-        await Promise.all(guildIds.map((guildId) => this.leave(guildId)));
-    }
+  getConnectedGuilds(): string[] {
+    return Array.from(this.connections.keys());
+  }
+
+  async leaveAll(): Promise<void> {
+    const guildIds = Array.from(this.connections.keys());
+    await Promise.all(guildIds.map((guildId) => this.leave(guildId)));
+  }
 }
 
 let voiceManagerInstance: VoiceManager | null = null;
 
 export function createVoiceManager(
-    onAudioChunk: (guildId: string, chunk: AudioChunk) => void,
-    getUsername: (guildId: string, userId: string) => string
+  onAudioChunk: (guildId: string, chunk: AudioChunk) => void,
+  getUsername: (guildId: string, userId: string) => string,
+  config: Config
 ): VoiceManager {
-    if (!voiceManagerInstance) {
-        voiceManagerInstance = new VoiceManager(onAudioChunk, getUsername);
-    }
-    return voiceManagerInstance;
+  if (!voiceManagerInstance) {
+    voiceManagerInstance = new VoiceManager(onAudioChunk, getUsername, config);
+  }
+  return voiceManagerInstance;
 }
 
 export function getVoiceManager(): VoiceManager | null {
-    return voiceManagerInstance;
+  return voiceManagerInstance;
 }
