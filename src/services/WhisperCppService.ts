@@ -22,13 +22,35 @@ class WhisperCppService {
 
   constructor(
     binaryPath: string = './whisper.cpp/build/bin/whisper-cli',
-    modelPath: string = './whisper.cpp/models/ggml-large-v3.bin',
+    modelPath: string = './whisper.cpp/models/ggml-large-v3-turbo.bin',
     language: string = 'id'
   ) {
-    this.binaryPath = binaryPath;
+    this.binaryPath = this.normalizeBinaryPath(binaryPath);
     this.modelPath = modelPath;
     this.language = language;
     this.tempDir = mkdtempSync(join(tmpdir(), 'whisper-'));
+  }
+
+  private normalizeBinaryPath(path: string): string {
+    if (process.platform === 'win32' && !path.endsWith('.exe')) {
+      return path + '.exe';
+    }
+    return path;
+  }
+
+  private resolveBinaryPath(): string {
+    if (existsSync(this.binaryPath)) {
+      return this.binaryPath;
+    }
+    if (process.platform === 'win32') {
+      const releasePath = this.binaryPath
+        .replace(/\\bin\\whisper-cli\.exe$/, '\\bin\\Release\\whisper-cli.exe')
+        .replace(/\/bin\/whisper-cli\.exe$/, '/bin/Release/whisper-cli.exe');
+      if (existsSync(releasePath)) {
+        return releasePath;
+      }
+    }
+    return this.binaryPath;
   }
 
   async transcribe(
@@ -38,8 +60,9 @@ class WhisperCppService {
     logger.debug(`Transcribing audio with whisper.cpp: ${filename} (${audioBuffer.length} bytes)`);
 
     if (!this.isAvailable()) {
+      const effectivePath = this.resolveBinaryPath();
       throw new TranscriptionError(
-        `Whisper.cpp binary not found at ${this.binaryPath} or model not found at ${this.modelPath}`
+        `Whisper.cpp binary not found at ${effectivePath} or model not found at ${this.modelPath}`
       );
     }
 
@@ -60,6 +83,18 @@ class WhisperCppService {
         '--output-json',
         '--output-file',
         tempJsonPath.replace('.json', ''),
+        '--beam-size',
+        '5',
+        '--best-of',
+        '5',
+        '--temperature',
+        '0.0',
+        '--temperature-inc',
+        '0.2',
+        '--entropy-thold',
+        '2.4',
+        '--logprob-thold',
+        '-1.0',
       ];
 
       const output = await this.runWhisper(args);
@@ -83,7 +118,7 @@ class WhisperCppService {
     return new Promise((resolve, reject) => {
       logger.debug(`Spawning whisper.cpp: ${this.binaryPath} ${args.join(' ')}`);
 
-      const process = spawn(this.binaryPath, args, {
+      const process = spawn(this.resolveBinaryPath(), args, {
         stdio: ['ignore', 'pipe', 'pipe'],
       });
 
