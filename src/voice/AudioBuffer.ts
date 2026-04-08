@@ -1,87 +1,87 @@
 export interface AudioBufferOptions {
-    maxDuration?: number;
-    silenceThreshold?: number;
-    minDuration?: number;
-    onFlush: (buffer: Buffer, duration: number) => void;
+  maxDuration?: number;
+  silenceThreshold?: number;
+  minDuration?: number;
+  onFlush: (buffer: Buffer, duration: number) => void;
 }
 
 export class AudioBuffer {
-    private chunks: Buffer[] = [];
-    private lastAudioTime: number = Date.now();
-    private silenceTimer: NodeJS.Timeout | null = null;
-    private readonly options: Required<AudioBufferOptions>;
+  private chunks: Buffer[] = [];
+  private lastAudioTime: number = Date.now();
+  private silenceTimer: NodeJS.Timeout | null = null;
+  private readonly options: Required<AudioBufferOptions>;
 
-    private static readonly BYTES_PER_SECOND = 96000;
+  private static readonly BYTES_PER_SECOND = 96000;
 
-    constructor(options: AudioBufferOptions) {
-        this.options = {
-            maxDuration: options.maxDuration ?? 30,
-            silenceThreshold: options.silenceThreshold ?? 2000,
-            minDuration: options.minDuration ?? 1,
-            onFlush: options.onFlush,
-        };
+  constructor(options: AudioBufferOptions) {
+    this.options = {
+      maxDuration: options.maxDuration ?? 25,
+      silenceThreshold: options.silenceThreshold ?? 2000,
+      minDuration: options.minDuration ?? 2,
+      onFlush: options.onFlush,
+    };
+  }
+
+  add(pcmChunk: Buffer): void {
+    if (pcmChunk.length === 0) {
+      return;
     }
 
-    add(pcmChunk: Buffer): void {
-        if (pcmChunk.length === 0) {
-            return;
-        }
+    this.chunks.push(pcmChunk);
+    this.lastAudioTime = Date.now();
 
-        this.chunks.push(pcmChunk);
-        this.lastAudioTime = Date.now();
-
-        const duration = this.getDuration();
-        if (duration >= this.options.maxDuration) {
-            this.flush();
-            return;
-        }
-
-        this.resetSilenceTimer();
+    const duration = this.getDuration();
+    if (duration >= this.options.maxDuration) {
+      this.flush();
+      return;
     }
 
-    flush(): void {
-        this.clearSilenceTimer();
+    this.resetSilenceTimer();
+  }
 
-        if (this.chunks.length === 0) {
-            return;
-        }
+  flush(): void {
+    this.clearSilenceTimer();
 
-        const duration = this.getDuration();
-        if (duration < this.options.minDuration) {
-            this.chunks = [];
-            return;
-        }
-
-        const buffer = Buffer.concat(this.chunks);
-        this.chunks = [];
-        this.options.onFlush(buffer, duration);
+    if (this.chunks.length === 0) {
+      return;
     }
 
-    getDuration(): number {
-        const totalBytes = this.chunks.reduce((sum, chunk) => sum + chunk.length, 0);
-        return totalBytes / AudioBuffer.BYTES_PER_SECOND;
+    const duration = this.getDuration();
+    if (duration < this.options.minDuration) {
+      this.chunks = [];
+      return;
     }
 
-    clear(): void {
-        this.clearSilenceTimer();
-        this.chunks = [];
-    }
+    const buffer = Buffer.concat(this.chunks);
+    this.chunks = [];
+    this.options.onFlush(buffer, duration);
+  }
 
-    private resetSilenceTimer(): void {
-        this.clearSilenceTimer();
+  getDuration(): number {
+    const totalBytes = this.chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+    return totalBytes / AudioBuffer.BYTES_PER_SECOND;
+  }
 
-        this.silenceTimer = setTimeout(() => {
-            const timeSinceLastAudio = Date.now() - this.lastAudioTime;
-            if (timeSinceLastAudio >= this.options.silenceThreshold) {
-                this.flush();
-            }
-        }, this.options.silenceThreshold);
-    }
+  clear(): void {
+    this.clearSilenceTimer();
+    this.chunks = [];
+  }
 
-    private clearSilenceTimer(): void {
-        if (this.silenceTimer) {
-            clearTimeout(this.silenceTimer);
-            this.silenceTimer = null;
-        }
+  private resetSilenceTimer(): void {
+    this.clearSilenceTimer();
+
+    this.silenceTimer = setTimeout(() => {
+      const timeSinceLastAudio = Date.now() - this.lastAudioTime;
+      if (timeSinceLastAudio >= this.options.silenceThreshold) {
+        this.flush();
+      }
+    }, this.options.silenceThreshold);
+  }
+
+  private clearSilenceTimer(): void {
+    if (this.silenceTimer) {
+      clearTimeout(this.silenceTimer);
+      this.silenceTimer = null;
     }
+  }
 }
