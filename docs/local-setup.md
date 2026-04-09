@@ -79,9 +79,34 @@ TRANSCRIPTION_PROVIDER=local
 WHISPER_CPP_PATH=./whisper.cpp/build/bin/whisper-cli
 WHISPER_MODEL_PATH=./whisper.cpp/models/ggml-large-v3-turbo.bin
 WHISPER_LANGUAGE=id
+WHISPER_THREADS=4
+WHISPER_INITIAL_PROMPT=Berikut adalah transkrip percakapan dalam bahasa Indonesia.
+WHISPER_SPLIT_ON_WORD=true
+WHISPER_SUPPRESS_NST=true
 ```
 
 On Windows, use `.\whisper.cpp\build\bin\Release\whisper-cli.exe`.
+
+### Accuracy settings
+
+| Variable                 | Default                    | Purpose                                                    |
+| ------------------------ | -------------------------- | ---------------------------------------------------------- |
+| `WHISPER_INITIAL_PROMPT` | Bahasa Indonesia seed text | Biases the model toward the target language and vocabulary |
+| `WHISPER_SPLIT_ON_WORD`  | `true`                     | Split on word boundaries instead of token boundaries       |
+| `WHISPER_SUPPRESS_NST`   | `true`                     | Suppress non-speech tokens (breathing, lip-smacking)       |
+| `WHISPER_THREADS`        | `4`                        | CPU threads for fallback computation                       |
+
+### Server mode
+
+Instead of spawning a new whisper-cli process per audio chunk, server mode keeps the model loaded in memory for much faster transcription:
+
+```env
+WHISPER_SERVER_MODE=true
+WHISPER_SERVER_HOST=127.0.0.1
+WHISPER_SERVER_PORT=8080
+```
+
+The bot starts and stops the whisper-server process automatically. No manual setup needed.
 
 ## Model Selection
 
