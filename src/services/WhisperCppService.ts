@@ -6,12 +6,50 @@ import type { TranscriptionResult, TranscriptionSegment, WordTiming } from '../t
 import { TranscriptionError } from '../utils/errors.js';
 import { logger } from './LoggerService.js';
 
+interface WhisperCppToken {
+  text: string;
+  timestamps: { from: string; to: string };
+  offsets: { from: number; to: number };
+  id: number;
+  p: number;
+  t_dtw: number;
+}
+
 interface WhisperCppJsonOutput {
+  systeminfo: string;
+  model: {
+    type: string;
+    multilingual: boolean;
+    vocab: number;
+    audio: { ctx: number; state: number; head: number; layer: number };
+    text: { ctx: number; state: number; head: number; layer: number };
+    mels: number;
+    ftype: number;
+  };
+  params: {
+    model: string;
+    language: string;
+    translate: boolean;
+  };
+  result: {
+    language: string;
+  };
   transcription: Array<{
     timestamps: { from: string; to: string };
     offsets: { from: number; to: number };
     text: string;
+    tokens?: WhisperCppToken[];
   }>;
+}
+
+export interface WhisperCppConfig {
+  binaryPath: string;
+  modelPath: string;
+  language: string;
+  threads: number;
+  initialPrompt: string;
+  splitOnWord: boolean;
+  suppressNst: boolean;
 }
 
 class WhisperCppService {
@@ -19,15 +57,22 @@ class WhisperCppService {
   private modelPath: string;
   private language: string;
   private tempDir: string;
+  private threads: number;
+  private initialPrompt: string;
+  private splitOnWord: boolean;
+  private suppressNst: boolean;
 
-  constructor(
-    binaryPath: string = './whisper.cpp/build/bin/whisper-cli',
-    modelPath: string = './whisper.cpp/models/ggml-large-v3-turbo.bin',
-    language: string = 'id'
-  ) {
-    this.binaryPath = this.normalizeBinaryPath(binaryPath);
-    this.modelPath = modelPath;
-    this.language = language;
+  constructor(config: WhisperCppConfig) {
+    this.binaryPath = this.normalizeBinaryPath(
+      config.binaryPath || './whisper.cpp/build/bin/whisper-cli'
+    );
+    this.modelPath = config.modelPath || './whisper.cpp/models/ggml-large-v3-turbo.bin';
+    this.language = config.language || 'id';
+    this.threads = config.threads || 4;
+    this.initialPrompt =
+      config.initialPrompt || 'Berikut adalah transkrip percakapan dalam bahasa Indonesia.';
+    this.splitOnWord = config.splitOnWord !== false;
+    this.suppressNst = config.suppressNst !== false;
     this.tempDir = mkdtempSync(join(tmpdir(), 'whisper-'));
   }
 
@@ -73,34 +118,11 @@ class WhisperCppService {
       writeFileSync(tempAudioPath, audioBuffer);
       logger.debug(`Wrote audio to temp file: ${tempAudioPath}`);
 
-      const args = [
-        '-m',
-        this.modelPath,
-        '-l',
-        this.language,
-        '-f',
-        tempAudioPath,
-        '--output-json',
-        '--output-file',
-        tempJsonPath.replace('.json', ''),
-        '--beam-size',
-        '5',
-        '--best-of',
-        '5',
-        '--temperature',
-        '0.0',
-        '--temperature-inc',
-        '0.2',
-        '--entropy-thold',
-        '2.4',
-        '--logprob-thold',
-        '-1.0',
-      ];
-
+      const args = this.buildArgs(tempAudioPath, tempJsonPath);
       const output = await this.runWhisper(args);
       logger.debug(`Whisper.cpp output: ${output.substring(0, 200)}...`);
 
-      const result = await this.parseJsonOutput(tempJsonPath);
+      const result = this.parseJsonOutput(tempJsonPath);
 
       this.cleanupTempFiles([tempAudioPath, tempJsonPath]);
 
@@ -114,30 +136,73 @@ class WhisperCppService {
     }
   }
 
+  private buildArgs(audioPath: string, jsonPath: string): string[] {
+    const args = [
+      '-m',
+      this.modelPath,
+      '-l',
+      this.language,
+      '-f',
+      audioPath,
+      '--output-json-full',
+      '--output-file',
+      jsonPath.replace('.json', ''),
+      '--beam-size',
+      String(this.threads > 1 ? 5 : 3),
+      '--best-of',
+      '5',
+      '--temperature',
+      '0.0',
+      '--temperature-inc',
+      '0.2',
+      '--entropy-thold',
+      '2.4',
+      '--logprob-thold',
+      '-1.0',
+      '-t',
+      String(this.threads),
+    ];
+
+    if (this.initialPrompt) {
+      args.push('--prompt', this.initialPrompt);
+    }
+
+    if (this.splitOnWord) {
+      args.push('--split-on-word');
+    }
+
+    if (this.suppressNst) {
+      args.push('--suppress-nst');
+    }
+
+    return args;
+  }
+
   private async runWhisper(args: string[]): Promise<string> {
     return new Promise((resolve, reject) => {
-      logger.debug(`Spawning whisper.cpp: ${this.binaryPath} ${args.join(' ')}`);
+      const binaryPath = this.resolveBinaryPath();
+      logger.debug(`Spawning whisper.cpp: ${binaryPath} ${args.join(' ')}`);
 
-      const process = spawn(this.resolveBinaryPath(), args, {
+      const proc = spawn(binaryPath, args, {
         stdio: ['ignore', 'pipe', 'pipe'],
       });
 
       let stdout = '';
       let stderr = '';
 
-      process.stdout.on('data', (data) => {
+      proc.stdout.on('data', (data) => {
         stdout += data.toString();
       });
 
-      process.stderr.on('data', (data) => {
+      proc.stderr.on('data', (data) => {
         stderr += data.toString();
       });
 
-      process.on('error', (error) => {
+      proc.on('error', (error) => {
         reject(new TranscriptionError(`Failed to spawn whisper.cpp: ${error.message}`));
       });
 
-      process.on('close', (code) => {
+      proc.on('close', (code) => {
         if (code === 0) {
           resolve(stdout);
         } else {
@@ -146,13 +211,13 @@ class WhisperCppService {
       });
 
       setTimeout(() => {
-        process.kill();
+        proc.kill();
         reject(new TranscriptionError('Whisper.cpp process timeout'));
-      }, 60000);
+      }, 120000);
     });
   }
 
-  private async parseJsonOutput(jsonPath: string): Promise<TranscriptionResult> {
+  private parseJsonOutput(jsonPath: string): TranscriptionResult {
     try {
       const jsonData = readFileSync(jsonPath, 'utf-8');
       const data: WhisperCppJsonOutput = JSON.parse(jsonData);
@@ -160,13 +225,30 @@ class WhisperCppService {
       const segments: TranscriptionSegment[] = data.transcription.map((item, idx) => {
         const startMs = item.offsets.from;
         const endMs = item.offsets.to;
+
+        // Compute confidence from token probabilities
+        const tokens = item.tokens || [];
+        const meaningfulTokens = tokens.filter(
+          (t) => t.text.trim().length > 0 && !t.text.startsWith('[_')
+        );
+        const avgLogProb =
+          meaningfulTokens.length > 0
+            ? Math.log(meaningfulTokens.reduce((sum, t) => sum + t.p, 0) / meaningfulTokens.length)
+            : -1.0;
+
+        // Estimate no_speech_prob from token count vs segment duration
+        // Tokens with very low probability indicate no-speech segments
+        const lowProbTokens = meaningfulTokens.filter((t) => t.p < 0.3).length;
+        const noSpeechProb =
+          meaningfulTokens.length > 0 ? lowProbTokens / meaningfulTokens.length : 0.5;
+
         return {
           id: idx,
           start: startMs / 1000,
           end: endMs / 1000,
           text: item.text.trim(),
-          avg_logprob: 0,
-          no_speech_prob: 0,
+          avg_logprob: avgLogProb,
+          no_speech_prob: noSpeechProb,
         };
       });
 
@@ -174,8 +256,9 @@ class WhisperCppService {
         .map((s) => s.text)
         .join(' ')
         .trim();
+
       const confidence = this.calculateConfidence(segments);
-      const words: WordTiming[] = this.extractWordTimings(segments);
+      const words: WordTiming[] = this.extractWordTimings(data.transcription);
       const duration = segments.length > 0 ? segments[segments.length - 1].end : 0;
 
       return {
@@ -209,21 +292,23 @@ class WhisperCppService {
     return Math.round(normalizedConfidence * 1000) / 1000;
   }
 
-  private extractWordTimings(segments: TranscriptionSegment[]): WordTiming[] {
+  private extractWordTimings(transcription: WhisperCppJsonOutput['transcription']): WordTiming[] {
     const words: WordTiming[] = [];
 
-    for (const segment of segments) {
-      const segmentWords = segment.text.split(/\s+/).filter((w) => w.length > 0);
-      const segmentDuration = segment.end - segment.start;
-      const wordDuration = segmentWords.length > 0 ? segmentDuration / segmentWords.length : 0;
+    for (const segment of transcription) {
+      if (!segment.tokens) continue;
 
-      segmentWords.forEach((word, index) => {
+      for (const token of segment.tokens) {
+        const text = token.text.trim();
+        if (!text || text.startsWith('[_')) continue;
+        if (token.offsets.from === 0 && token.offsets.to === 0) continue;
+
         words.push({
-          word,
-          start: segment.start + index * wordDuration,
-          end: segment.start + (index + 1) * wordDuration,
+          word: text,
+          start: token.offsets.from / 1000,
+          end: token.offsets.to / 1000,
         });
-      });
+      }
     }
 
     return words;
@@ -242,7 +327,7 @@ class WhisperCppService {
   }
 
   isAvailable(): boolean {
-    return existsSync(this.binaryPath) && existsSync(this.modelPath);
+    return existsSync(this.resolveBinaryPath()) && existsSync(this.modelPath);
   }
 
   shutdown(): void {
