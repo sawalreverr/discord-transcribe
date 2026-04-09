@@ -5,20 +5,37 @@ import { logger } from './LoggerService.js';
 import { AudioEncoder } from '../voice/AudioEncoder.js';
 
 class TranscriptionService {
-  private pendingTranscriptions: Set<string> = new Set();
+  private userQueues: Map<string, Promise<void>> = new Map();
 
   async processAudioChunk(_guildId: string, chunk: AudioChunk): Promise<void> {
-    const { userId, username, buffer } = chunk;
+    const { userId } = chunk;
 
-    if (this.pendingTranscriptions.has(userId)) {
-      logger.debug(`Skipping ${username} - transcription already in progress`);
+    const existingQueue = this.userQueues.get(userId);
+    if (existingQueue) {
+      const newQueue = existingQueue.catch(() => {}).then(() => this.transcribeChunk(chunk));
+      this.userQueues.set(userId, newQueue);
+      newQueue.finally(() => {
+        if (this.userQueues.get(userId) === newQueue) {
+          this.userQueues.delete(userId);
+        }
+      });
       return;
     }
 
-    this.pendingTranscriptions.add(userId);
+    const queue = this.transcribeChunk(chunk);
+    this.userQueues.set(userId, queue);
+    queue.finally(() => {
+      if (this.userQueues.get(userId) === queue) {
+        this.userQueues.delete(userId);
+      }
+    });
+  }
+
+  private async transcribeChunk(chunk: AudioChunk): Promise<void> {
+    const { userId, username, buffer } = chunk;
 
     try {
-      const wavBuffer = AudioEncoder.pcmToWav(buffer, 48000, 1);
+      const wavBuffer = AudioEncoder.pcmToWav(buffer);
 
       const result = await transcriptionBackend.transcribe(
         wavBuffer,
@@ -42,12 +59,11 @@ class TranscriptionService {
       }
     } catch (error) {
       logger.error(`Transcription failed for ${username}:`, error);
-    } finally {
-      this.pendingTranscriptions.delete(userId);
     }
   }
 
   async shutdown(): Promise<void> {
+    await Promise.allSettled(this.userQueues.values());
     await transcriptStorage.close();
     logger.info('TranscriptionService shut down');
   }

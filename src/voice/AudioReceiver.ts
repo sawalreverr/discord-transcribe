@@ -108,7 +108,7 @@ export class AudioReceiver {
     try {
       session.decoder.delete();
     } catch {
-      // Ignore
+      // Ignore cleanup errors
     }
     this.sessions.delete(userId);
   }
@@ -131,7 +131,7 @@ export class AudioReceiver {
       try {
         session.decoder.delete();
       } catch {
-        // Ignore
+        // Ignore cleanup errors
       }
     }
     this.sessions.clear();
