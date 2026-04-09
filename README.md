@@ -2,7 +2,7 @@
 
 Real-time Discord voice transcription with speaker identification. Supports Groq API (cloud) and whisper.cpp (local/offline).
 
-Optimized for **Bahasa Indonesia** 🇮🇩
+Optimized for **Bahasa Indonesia**
 
 ## Quick Start
 
@@ -27,12 +27,11 @@ pnpm run dev
 ```env
 DISCORD_BOT_TOKEN=your_bot_token
 DISCORD_CLIENT_ID=your_client_id
-TRANSCRIPTION_PROVIDER=groq    # "groq" or "local"
-GROQ_API_KEY=your_key           # required for groq
-GROQ_LANGUAGE=id
+TRANSCRIPTION_PROVIDER=local    # "groq" or "local"
+GROQ_API_KEY=your_key            # required for groq
 ```
 
-For local whisper.cpp setup, see [docs/local-setup.md](docs/local-setup.md).
+For local whisper.cpp setup, GPU support, and all config options, see [docs/local-setup.md](docs/local-setup.md).
 
 ## Output
 
